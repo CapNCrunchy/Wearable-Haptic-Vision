@@ -12,7 +12,7 @@ class BluetoothManager: NSObject, CBCentralManagerDelegate {
     private var centralManager: CBCentralManager!
     
     // minimum RSSI value allowed for the device to be discoverable
-    let MIN_RSSI = -50
+    let MIN_RSSI = -60
     
     var state: CBManagerState?
     var scanning = false
