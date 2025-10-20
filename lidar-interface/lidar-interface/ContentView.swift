@@ -9,16 +9,19 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        NavigationStack {
+            PeripheralDeviceListView()
+            
+            .navigationTitle("Connect Accessory")
+            .navigationSubtitle("Select the wearable haptic feedback device you want connect to.")
         }
-        .padding()
     }
 }
 
+// TODO: figure out how to mock the manager better to test independent of physical hardware
 #Preview {
+    let mockManager = BluetoothManager()
+    
     ContentView()
+        .environment(mockManager)
 }
