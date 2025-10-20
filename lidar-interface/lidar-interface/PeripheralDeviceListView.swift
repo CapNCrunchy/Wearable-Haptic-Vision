@@ -44,5 +44,10 @@ struct PeripheralDeviceListView: View {
                 }
             }
         }
+        .onChange(of: bluetoothManager.state) { _, newState in
+            if newState == .poweredOn && !bluetoothManager.scanning {
+                bluetoothManager.startScanning()
+            }
+        }
     }
 }
