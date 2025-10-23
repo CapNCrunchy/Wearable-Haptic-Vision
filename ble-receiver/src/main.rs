@@ -24,6 +24,7 @@ async fn main() -> bluer::Result<()> {
         service_uuids: vec![SRV_UUID.parse().unwrap()].into_iter().collect(),
         discoverable: Some(true),
         local_name: Some(DEVICE_NAME.to_string()),
+        system_includes,
         ..Default::default()
     };
     println!("{:?}", &le_advertisement);
