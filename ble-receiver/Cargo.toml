@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bluer = "=0.16.3"
+bluer = "0.17.4"
 tokio = { version = "1", features = ["full"] }
 env_logger = "0.10"
 log = "0.4"
