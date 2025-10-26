@@ -1,5 +1,17 @@
 import asyncio
 from bleak import BleakClient, BleakScanner
+import random
+import struct
+
+async def write_data(client, writable_char):
+    while True:
+        data = random.random()
+        data_bytes = struct.pack('f', data)
+        
+        await client.write_gatt_char(writable_char.uuid, data_bytes)
+        print(f"Data written successfully! Value: {data}")
+        
+        await asyncio.sleep(5)
 
 async def main():
     service_uuid = "8b322909-2d3b-447b-a4d5-dfe0c009ec5a"
@@ -28,10 +40,8 @@ async def main():
                     break
 
             if writable_char:
-                data = bytes([0x01, 0x02, 0x03])
-                await client.write_gatt_char(writable_char.uuid, data)
-                print("Data written successfully!")
+                await write_data(client, writable_char)
             else:
                 print("No writable characteristic found!")
 
-asyncio.run(main()) 
+asyncio.run(main())
