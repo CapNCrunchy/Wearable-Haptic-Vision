@@ -8,12 +8,22 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(BluetoothManager.self) var bluetoothManager
+    
     var body: some View {
-        NavigationStack {
-            PeripheralDeviceListView()
-            
-            .navigationTitle("Connect Accessory")
-            .navigationSubtitle("Select the wearable haptic feedback device you want connect to.")
+        if bluetoothManager.connectedDevice != nil {
+            NavigationStack {
+                BLETransmitterView()
+                
+                .navigationTitle("BLE Transmitter")
+            }
+        } else {
+            NavigationStack {
+                PeripheralDeviceListView()
+                
+                .navigationTitle("Connect Accessory")
+                .navigationSubtitle("Select the wearable haptic feedback device you want connect to.")
+            }
         }
     }
 }

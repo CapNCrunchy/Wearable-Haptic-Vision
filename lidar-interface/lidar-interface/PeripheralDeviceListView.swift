@@ -11,13 +11,22 @@ import CoreBluetooth
 // TODO: figure out how to break this down into multiple components to better preview each
 struct PeripheralDeviceListView: View {
     @Environment(BluetoothManager.self) var bluetoothManager
+    @State private var selectedDeviceId: String?
     
     var body: some View {
-        List {
+        List(selection: $selectedDeviceId) {
             Section {
                 if bluetoothManager.state == .poweredOn {
                     ForEach(bluetoothManager.discoveredDevices, id: \.identifier) { peripheral in
                         Text(peripheral.name ?? "Unknown device")
+                            .tag(peripheral.identifier)
+                        
+                        Spacer()
+                        if bluetoothManager.connecting {
+                            ProgressView()
+                        } else if bluetoothManager.connectedDevice != nil {
+                            Image(systemName: "checkmark")
+                        }
                     }
                 } else if bluetoothManager.state != .resetting {
                     VStack(spacing: 8) {
@@ -47,6 +56,12 @@ struct PeripheralDeviceListView: View {
         .onChange(of: bluetoothManager.state) { _, newState in
             if newState == .poweredOn && !bluetoothManager.scanning {
                 bluetoothManager.startScanning()
+            }
+        }
+        .onChange(of: bluetoothManager.connectedDevice) {oldState, newState in
+            // device successfully connected
+            if oldState == nil && newState != nil {
+                
             }
         }
     }
