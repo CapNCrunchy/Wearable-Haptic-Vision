@@ -1,9 +1,12 @@
 [package]
 name = "ble-receiver"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-bluer = { version = "0.17.4", features = ["bluetoothd"] }
-tokio = { version = "1.0.0", features = ["rt", "rt-multi-thread", "macros", "io-util", "io-std"] }
-env_logger = "0.11.8"
+bluer = "=0.16.3"
+tokio = { version = "1", features = ["full"] }
+env_logger = "0.10"
+log = "0.4"
+futures = "0.3"
+uuid = "1"
