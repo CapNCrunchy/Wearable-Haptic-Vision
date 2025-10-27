@@ -1,74 +1,119 @@
-use bluer::{Address, Uuid};
-use bluer::gatt::{
-    local::{Application, Service, Characteristic, CharacteristicNotify}
+use bluer::{
+    adv::Advertisement,
+    gatt::local::{
+        Application, Characteristic, CharacteristicRead, CharacteristicWrite, CharacteristicWriteMethod,
+        Service,
+    },
+    Uuid,
 };
-use std::sync::{Arc, Mutex};
+use futures::FutureExt;
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use tokio::{sync::Mutex, time::sleep};
 
-const SRV_UUID: &str = "8b322909-2d3b-447b-a4d5-dfe0c009ec5a";
-const CMD_UUID: &str = "8b32290a-2d3b-447b-a4d5-dfe0c009ec5a";
-const STAT_UUID:&str = "8b32290b-2d3b-447b-a4d5-dfe0c009ec5a";
-const INFO_UUID:&str = "8b32290c-2d3b-447b-a4d5-dfe0c009ec5a";
+const SRV_UUID: Uuid = Uuid::from_u128(0x8b322909_2d3b_447b_a4d5_dfe0c009ec5a);
+const WR_CHAR_UUID: Uuid = Uuid::from_u128(0x8b32290a_2d3b_447b_a4d5_dfe0c009ec5a);
+const INFO_UUID:   Uuid = Uuid::from_u128(0x8b32290c_2d3b_447b_a4d5_dfe0c009ec5a);
 
-#[tokio::main]
-async fn main() -> bluer::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     env_logger::init();
-    let session = bluer::Session::new().await?;
-    let adapter = session.default_adapter().await?;
-    adapter.set_powered(true).await?;
 
-    let app = Application::new(&session, "whv").await?;
-    let service = Service::new_primary(&app, Uuid::parse_str(SRV_UUID)?).await?;
+    let session = bluer::Session::new().await.expect("create bluer session");
+    let adapter = session
+        .default_adapter()
+        .await
+        .expect("get default adapter");
+    adapter
+        .set_powered(true)
+        .await
+        .expect("power on adapter");
 
-    let status_tx: Arc<Mutex<Option<CharacteristicNotify>>> = Arc::new(Mutex::new(None));
+    let mut svc = BTreeSet::new();
+    svc.insert(SRV_UUID);
+    let adv = Advertisement {
+        service_uuids: svc,
+        discoverable: Some(true),
+        local_name: Some("WHV Haptic Receiver".to_string()),
+        ..Default::default()
+    };
+    let _adv_handle = adapter.advertise(adv).await.expect("start advertising");
 
-    {
-        let ch = Characteristic::new(&service, Uuid::parse_str(STAT_UUID)?).await?;
-        ch.set_flags(&["notify"]).await?;
-        let tx_clone = status_tx.clone();
-        ch.on_subscribe(move |mut notifier| {
-            *tx_clone.lock().unwrap() = Some(notifier);
-            Box::pin(async move { Ok(()) })
-        });
-        ch.on_unsubscribe(move || {
-            *status_tx.lock().unwrap() = None;
-            Box::pin(async move { Ok(()) })
-        });
+    let last_payload: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let last_payload_for_write = Arc::clone(&last_payload);
+    let last_payload_for_read  = Arc::clone(&last_payload);
+
+    let app = Application {
+        services: vec![Service {
+            uuid: SRV_UUID,
+            primary: true,
+            characteristics: vec![
+                Characteristic {
+                    uuid: WR_CHAR_UUID,
+                    write: Some(CharacteristicWrite {
+                        write: true,
+                        write_without_response: true,
+                        method: CharacteristicWriteMethod::Fun(Box::new(move |data, _req| {
+                            let last_payload_for_write = Arc::clone(&last_payload_for_write);
+                            async move {
+                                {
+                                    let mut buf = last_payload_for_write.lock().await;
+                                    *buf = data.clone();
+                                }
+
+                                print!("RX {} bytes: [", data.len());
+                                for (i, b) in data.iter().enumerate() {
+                                    if i > 0 { print!(" "); }
+                                    print!("{:02X}", b);
+                                }
+                                println!("]");
+
+                                if data.len() == 4 {
+                                    let mut arr = [0u8; 4];
+                                    arr.copy_from_slice(&data);
+                                    let val = f32::from_le_bytes(arr);
+                                    println!("  as f32 (LE): {}", val);
+                                }
+
+                                Ok(())
+                            }
+                            .boxed()
+                        })),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+
+                Characteristic {
+                    uuid: INFO_UUID,
+                    read: Some(CharacteristicRead {
+                        read: true,
+                        fun: Box::new(move |_req| {
+                            let last_payload_for_read = Arc::clone(&last_payload_for_read);
+                            async move {
+                                let len = last_payload_for_read.lock().await.len();
+                                let s = format!("WHV Pi5 Receiver v0.1 (last {} bytes)", len);
+                                Ok(s.into_bytes())
+                            }
+                            .boxed()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let _app_handle = adapter
+        .serve_gatt_application(app)
+        .await
+        .expect("serve gatt application");
+
+    println!("BLE receiver is up. Write to char {} and I'll log it.", WR_CHAR_UUID);
+
+    loop {
+        sleep(Duration::from_secs(60)).await;
     }
-    {
-        let ch = Characteristic::new(&service, Uuid::parse_str(CMD_UUID)?).await?;
-        ch.set_flags(&["write", "write-without-response"]).await?;
-        let tx_clone = status_tx.clone();
-        ch.on_write(move |data, _offset| {
-            let resp = handle_command_and_make_status(&data);
-            if let Some(notifier) = tx_clone.lock().unwrap().as_mut() {
-                let _ = notifier.notify(resp);
-            }
-            Box::pin(async move { Ok(()) })
-        });
-    }
-    {
-        let ch = Characteristic::new(&service, Uuid::parse_str(INFO_UUID)?).await?;
-        ch.set_flags(&["read"]).await?;
-        ch.on_read(move |_offset| {
-            let v = b"WHV Pi5 v0.1";
-            Box::pin(async move { Ok(v.to_vec()) })
-        });
-    }
-    app.register().await?;
-
-    use bluer::adv::Advertisement;
-    let le = adapter.le_advertisement().await?;
-    le.set_service_uuids(vec![Uuid::parse_str(SRV_UUID)?]).await?;
-    le.set_local_name(Some("WHV Haptic Feedback Device")).await?;
-    le.activate().await?;
-
-    println!("GATT");
-    futures::future::pending::<()>().await;
-    Ok(())
-}
-
-fn handle_command_and_make_status(cmd: &[u8]) -> Vec<u8> {
-    let opcode = *cmd.get(0).unwrap_or(&0x00);
-    let mut out = vec![0xAA, opcode, 0x00];
-    out
 }
