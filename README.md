@@ -10,3 +10,6 @@ Capstone project for UF CpE
 - Inflate/deflate Schematics w/ Rasperbery pi & modules
 - Swift IOS application to interface with LIDAR
 - Schematics and models for the vest & soft 3d-printed nodes
+
+# Known Bugs
+- None :)
