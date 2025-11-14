@@ -11,11 +11,11 @@ struct ContentView: View {
     @Environment(BluetoothManager.self) var bluetoothManager
     
     var body: some View {
-        if bluetoothManager.connectedDevice != nil {
+        if !bluetoothManager.connecting && bluetoothManager.connectedDevice != nil {
             NavigationStack {
-                BLETransmitterView()
+                DepthMapView()
                 
-                .navigationTitle("BLE Transmitter")
+                .navigationTitle("Depth Map View")
             }
         } else {
             NavigationStack {
