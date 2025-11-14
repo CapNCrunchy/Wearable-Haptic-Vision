@@ -8,13 +8,14 @@
 import CoreBluetooth
 
 @Observable
-class BluetoothManager: NSObject, CBCentralManagerDelegate {
+class BluetoothManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private var centralManager: CBCentralManager!
     
     // minimum RSSI value allowed for the device to be discoverable
     let MIN_RSSI = -60
     
     let WHV_SRV_UUID = CBUUID(string: "8b322909-2d3b-447b-a4d5-dfe0c009ec5a")
+    let WHV_CHAR_UUID = CBUUID(string: "8b32290a-2d3b-447b-a4d5-dfe0c009ec5a")
     
     var state: CBManagerState?
     var scanning = false
@@ -56,12 +57,16 @@ class BluetoothManager: NSObject, CBCentralManagerDelegate {
         if scanning {
             centralManager.stopScan()
         }
+        
+        scanning = false
     }
     
     func sendData(_ data: Data) {
         guard let peripheral = connectedDevice, let characteristic = writeCharacteristic else {
             return
         }
+        
+        print("Sending data \(data) to characteristic \(characteristic.uuid)... we are ion state \(peripheral.state)")
         
         if characteristic.properties.contains(.write) {
             peripheral.writeValue(data, for: characteristic, type: .withResponse)
@@ -89,18 +94,29 @@ class BluetoothManager: NSObject, CBCentralManagerDelegate {
     }
     
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        stopScanning()
+        peripheral.delegate = self
+        peripheral.discoverServices([WHV_SRV_UUID])
         connectedDevice = peripheral
-        connecting = false
     }
     
-    func centralManager(_ central: CBCentralManager, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard let peripheralServices = peripheral.services else { return }
+        guard let service = peripheralServices.first(where: { $0.uuid.isEqual(WHV_SRV_UUID) }) else { return }
+        
+        peripheral.discoverCharacteristics([WHV_CHAR_UUID], for: service)
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard let characteristics = service.characteristics else { return }
         
         for characteristic in characteristics {
-            if characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse) {
+            if characteristic.uuid.isEqual(WHV_CHAR_UUID) {
                 writeCharacteristic = characteristic
             }
         }
+        
+        connecting = false
     }
     
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
