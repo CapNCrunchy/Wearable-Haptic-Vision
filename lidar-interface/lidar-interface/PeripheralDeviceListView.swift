@@ -11,21 +11,23 @@ import CoreBluetooth
 // TODO: figure out how to break this down into multiple components to better preview each
 struct PeripheralDeviceListView: View {
     @Environment(BluetoothManager.self) var bluetoothManager
-    @State private var selectedDeviceId: String?
+    @State private var selectedDeviceId: UUID?
     
     var body: some View {
         List(selection: $selectedDeviceId) {
             Section {
                 if bluetoothManager.state == .poweredOn {
                     ForEach(bluetoothManager.discoveredDevices, id: \.identifier) { peripheral in
-                        Text(peripheral.name ?? "Unknown device")
-                            .tag(peripheral.identifier)
-                        
-                        Spacer()
-                        if bluetoothManager.connecting {
-                            ProgressView()
-                        } else if bluetoothManager.connectedDevice != nil {
-                            Image(systemName: "checkmark")
+                        HStack {
+                            Text(peripheral.name ?? "Unknown device")
+                                .tag(peripheral.identifier)
+                            
+                            Spacer()
+                            if bluetoothManager.connecting {
+                                ProgressView()
+                            } else if bluetoothManager.connectedDevice != nil {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 } else if bluetoothManager.state != .resetting {
@@ -51,6 +53,13 @@ struct PeripheralDeviceListView: View {
                         ProgressView()
                     }
                 }
+            }
+        }
+        .onChange(of: selectedDeviceId) {_, newValue in
+            guard let id = newValue else { return }
+            
+            if let device = bluetoothManager.discoveredDevices.first(where: { $0.identifier == id }) {
+                bluetoothManager.connectToDevice(device)
             }
         }
         .onChange(of: bluetoothManager.state) { _, newState in
