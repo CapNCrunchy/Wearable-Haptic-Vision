@@ -62,15 +62,25 @@ NodeStates = bytearray(6)
 
 # helper function
 def apply_node_state(state, pin1, pin2):
-    if state in (2,3,4):
+    if state == 1:
+        pin1.value = False
+        pin2.value = False
+    elif state == 2:
+        pin1.value = False
+        pin2.value = True
+    elif state == 3:
         pin1.value = True
         pin2.value = False
+    elif state == 4:
+        pin1.value = True
+        pin2.value = True
     else:
+        # default
         pin1.value = False
         pin2.value = False
 
 while True:
-    if serial.in_waiting >= 6: #sending the 6 bytes that correspond to the 6 node states (1-4)
+    if serial is not None and serial.in_waiting >= 6: #sending the 6 bytes that correspond to the 6 node states (1-4)
         serial.readinto(NodeStates)
 
         # loop through and parse the bytearray for each value and then assign each node accordingly
