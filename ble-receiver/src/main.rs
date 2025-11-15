@@ -70,6 +70,7 @@ async fn main() {
                                 }
                                 println!("]");
 
+<<<<<<< HEAD
                                 let to_send: &[u8] = if data.len() >= 6 {
                                     &data[..6]
                                 } else {
@@ -98,6 +99,8 @@ async fn main() {
                                             }
                                         }
                                 }
+=======
+>>>>>>> 3a5e5446820fe5d393021ab2c8f127b041f86f62
                                 if data.len() == 4 {
                                     let mut arr = [0u8; 4];
                                     arr.copy_from_slice(&data);
@@ -148,4 +151,8 @@ async fn main() {
     loop {
         sleep(Duration::from_secs(60)).await;
     }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 3a5e5446820fe5d393021ab2c8f127b041f86f62
