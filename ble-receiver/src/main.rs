@@ -10,8 +10,10 @@ use futures::FutureExt;
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::sleep};
 
-use serialport::SerialPort;
+use serialport;
 use std::io::Write;
+use serde::Deserialize;
+use serde_json;
 
 const SRV_UUID: Uuid = Uuid::from_u128(0x8b322909_2d3b_447b_a4d5_dfe0c009ec5a);
 const WR_CHAR_UUID: Uuid = Uuid::from_u128(0x8b32290a_2d3b_447b_a4d5_dfe0c009ec5a);
@@ -70,44 +72,7 @@ async fn main() {
                                 }
                                 println!("]");
 
-<<<<<<< HEAD
-                                let to_send: &[u8] = if data.len() >= 6 {
-                                    &data[..6]
-                                } else {
-                                    &data[..]
-                                };
-
-                                if !to_send.is_empty() {
-                                    match serialport::new(
-                                            "/dev/ttyACM0",
-                                            115200,
-                                        )
-                                        .timeout(Duration::from_millis(
-                                            50,
-                                        ))
-                                        .open()
-                                        {
-                                            Ok(mut port) => {
-                                                if let Err(e) =
-                                                    port.write_all(&states)
-                                                {
-                                                    eprintln!("Failed to write node states to UART: {e:?}");
-                                                }
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Could not open /dev/ttyACM0: {e:?}");
-                                            }
-                                        }
-                                }
-=======
->>>>>>> 3a5e5446820fe5d393021ab2c8f127b041f86f62
-                                if data.len() == 4 {
-                                    let mut arr = [0u8; 4];
-                                    arr.copy_from_slice(&data);
-                                    let val = f32::from_le_bytes(arr);
-                                    println!("  as f32 (LE): {}", val);
-                                }
-
+                                process_payload_and_send_to_feather(&data);
                                 
                                 Ok(())
                             }
@@ -151,8 +116,135 @@ async fn main() {
     loop {
         sleep(Duration::from_secs(60)).await;
     }
-<<<<<<< HEAD
 }
-=======
+
+fn process_payload_and_send_to_feather(data: &[u8]) {
+    // 1) If  JSON, treat as heatmap and map to 6 states
+    if !data.is_empty() && (data[0] == b'[' || data[0] == b'{') {
+        if let Some(grid) = parse_json_grid(data) {
+            println!(
+                "Parsed JSON grid: {} rows x {} cols",
+                grid.len(),
+                if grid.is_empty() { 0 } else { grid[0].len() }
+            );
+
+            let states = grid_to_node_states_4(&grid);
+            println!("Node states to send: {:?}", states);
+
+            match serialport::new("/dev/ttyACM0", 115_200)
+                .timeout(Duration::from_millis(50))
+                .open()
+            {
+                Ok(mut port) => {
+                    if let Err(e) = port.write_all(&states) {
+                        eprintln!("UART write failed: {e:?}");
+                    }
+                }
+                Err(e) => eprintln!("Could not open /dev/ttyACM0: {e:?}"),
+            }
+
+            return;
+        }
+
+        println!("JSON detected but failed to parse.");
+        return;
+    }
+
+    // If not JSON, but at least 6 raw bytes, forward as node states
+    if data.len() >= 6 {
+        let to_send = &data[..6];
+        println!("Forwarding raw 6-byte states: {:?}", to_send);
+
+        match serialport::new("/dev/ttyACM0", 115_200)
+            .timeout(Duration::from_millis(50))
+            .open()
+        {
+            Ok(mut port) => {
+                if let Err(e) = port.write_all(to_send) {
+                    eprintln!("UART write failed: {e:?}");
+                }
+            }
+            Err(e) => eprintln!("Could not open /dev/ttyACM0: {e:?}"),
+        }
+
+        return;
+    }
+
+    println!(
+        "Received {} bytes — not enough for raw node-state packet.",
+        data.len()
+    );
 }
->>>>>>> 3a5e5446820fe5d393021ab2c8f127b041f86f62
+
+fn parse_json_grid(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
+    // Plain [[f32]]
+    if let Ok(v) = serde_json::from_slice::<Vec<Vec<f32>>>(bytes) {
+        if is_rectangular(&v) {
+            return Some(v);
+        }
+    }
+
+    // Wrapper
+    #[derive(Deserialize)]
+    struct GridWrapper {
+        grid: Vec<Vec<f32>>,
+    }
+
+    if let Ok(w) = serde_json::from_slice::<GridWrapper>(bytes) {
+        if is_rectangular(&w.grid) {
+            return Some(w.grid);
+        }
+    }
+
+    None
+}
+
+fn is_rectangular(v: &Vec<Vec<f32>>) -> bool {
+    if v.is_empty() {
+        return true;
+    }
+    let cols = v[0].len();
+    v.iter().all(|row| row.len() == cols)
+}
+
+fn grid_to_node_states_4(grid: &Vec<Vec<f32>>) -> [u8; 6] {
+    let mut states = [4u8; 6]; // default all to least pressure
+
+    if grid.is_empty() || grid[0].is_empty() {
+        return states;
+    }
+
+    // Ensures only 2x3 grid is sent
+    let rows = grid.len().min(2);
+    let cols = grid[0].len().min(3);
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let idx = r * 3 + c; // 0..5
+            let mut v = grid[r][c];
+
+            if v.is_nan() {
+                v = 0.0;
+            }
+            if v < 0.0 {
+                v = 0.0;
+            }
+            if v > 1.0 {
+                v = 1.0;
+            }
+
+            let state = if v < 0.25 {
+                4u8   // far, least pressure
+            } else if v < 0.5 {
+                3u8
+            } else if v < 0.75 {
+                2u8
+            } else {
+                1u8
+            };
+
+            states[idx] = state;
+        }
+    }
+    states
+}
