@@ -100,6 +100,34 @@ async fn main() {
                                             println!("Row0 preview: [{}]{}", preview,
                                                      if grid.cols > 4 { ", …" } else { "" });
                                         }
+
+                                        // send grid to 6 node states over UART
+                                        let states = grid_to_node_states_4(&grid);
+                                        println!("Node stats to send: {:?}", states);
+
+                                        use serialport::SerialPort;
+                                        use std::io::Write;
+
+                                        match serialport::new(
+                                            "/dev/ttyACM0",
+                                            115200,
+                                        )
+                                        .timeout(Duration::from_millis(
+                                            50,
+                                        ))
+                                        .open()
+                                        {
+                                            Ok(mut port) => {
+                                                if let Err(e) =
+                                                    port.write_all(&states)
+                                                {
+                                                    eprintln!("Failed to write node states to UART: {e:?}");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Could not open /dev/ttyACM0: {e:?}");
+                                            }
+                                        }
                                     } else {
                                         println!("JSON detected but failed to parse as a 2D float array.");
                                     }
@@ -159,6 +187,50 @@ async fn main() {
 
     println!("BLE receiver is up. Write JSON 2D arrays to {} and I'll store them.", WR_CHAR_UUID);
     loop { sleep(Duration::from_secs(60)).await; }
+}
+
+// Helper function to map GridFrame in 4 states
+fn grid_to_node_states_4(grid: &GridFrame) -> [u8; 6] {
+    // Default all nodes to state 1 (deflated)
+    let mut states = [1u8; 6]; // 6 element array for each node
+
+    if grid.rows == 0 || grid.cols == 0 {
+        return states;
+    }
+
+    // Ensures only 2x3 grid is sent
+    let rows = grid.rows.min(2);
+    let cols = grid.cols.min(3);
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let idx = r * 3 + c; // 0..5
+
+            let mut v = grid.data[r][c];
+            if v.is_nan() {
+                v = 0.0;
+            }
+            if v < 0.0 {
+                v = 0.0;
+            }
+            if v > 1.0 {
+                v = 1.0;
+            }
+
+            // Thresholds from grid data
+            let state = if v < 0.25 {
+                4u8 // least pressure
+            } else if v < 0.5 {
+                3u8
+            } else if v < 0.75 {
+                2u8
+            } else {
+                1u8
+            };
+            states[idx] = state;
+        }
+    }
+    states
 }
 
 fn parse_json_grid(bytes: &[u8]) -> Option<GridFrame> {
