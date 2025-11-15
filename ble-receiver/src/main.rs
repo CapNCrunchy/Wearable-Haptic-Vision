@@ -12,7 +12,6 @@ use tokio::{sync::Mutex, time::sleep};
 
 use serialport;
 use std::io::Write;
-use serde::Deserialize;
 use serde_json;
 
 const SRV_UUID: Uuid = Uuid::from_u128(0x8b322909_2d3b_447b_a4d5_dfe0c009ec5a);
@@ -61,7 +60,7 @@ async fn main() {
                             let last_payload_for_write = Arc::clone(&last_payload_for_write);
                             async move {
                                 {
-                                    let mut buf = last_payload_for_write.lock().await;
+                                    let mut buf = last_payload_for_write.lock();
                                     *buf = data.clone();
                                 }
 
@@ -118,8 +117,8 @@ async fn main() {
     }
 }
 
-async fn process_payload_and_send_to_feather(data: &[u8]) {
-    // If JSON, treat as heatmap and map to 6 states
+fn process_payload_and_send_to_feather(data: &[u8]) {
+    // Treat as heatmap and map to 6 states
     if let Some(grid) = parse_json_grid(data) {
         let states = grid_to_node_states_4(&grid);
 
@@ -130,10 +129,11 @@ async fn process_payload_and_send_to_feather(data: &[u8]) {
         let _ = port.write_all(&states);
     }
     return;
-}
+    }
 }
 
 fn parse_json_grid(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
+    println!("RAW UTF8: {}", String::from_utf8_lossy(bytes));
     serde_json::from_slice::<Vec<Vec<f32>>>(bytes).ok()
 }
 
