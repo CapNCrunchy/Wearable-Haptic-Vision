@@ -59,15 +59,32 @@ Node6_2.direction = digitalio.Direction.OUTPUT
 # Use the "data" serial channel
 serial = usb_cdc.data
 NodeStates = bytearray(6)
+
+# helper function
+def apply_node_state(state, pin1, pin2):
+    if state in (2,3,4):
+        pin1.value = True
+        pin2.value = False
+    else:
+        pin1.value = False
+        pin2.value = False
+
 while True:
     if serial.in_waiting >= 6: #sending the 6 bytes that correspond to the 6 node states (1-4)
         serial.readinto(NodeStates)
+
+        # loop through and parse the bytearray for each value and then assign each node accordingly
+        # turn on every node
+        apply_node_state(NodeStates[0], Node1_1, Node1_2)
+        apply_node_state(NodeStates[1], Node2_1, Node2_2)
+        apply_node_state(NodeStates[2], Node3_1, Node3_2)
+        apply_node_state(NodeStates[3], Node4_1, Node4_2)
+        apply_node_state(NodeStates[4], Node5_1, Node5_2)
+        apply_node_state(NodeStates[5], Node6_1, Node6_2)
     
     AllNodesOn.value = True
-    #gonna loop through and parse the bytearray for each value and then assign each node accordingly
     
 
 
-    #turn on every node 
     
     time.sleep(0.01)
