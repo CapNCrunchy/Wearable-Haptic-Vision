@@ -118,93 +118,23 @@ async fn main() {
     }
 }
 
-fn process_payload_and_send_to_feather(data: &[u8]) {
-    // 1) If  JSON, treat as heatmap and map to 6 states
-    if !data.is_empty() && (data[0] == b'[' || data[0] == b'{') {
-        if let Some(grid) = parse_json_grid(data) {
-            println!(
-                "Parsed JSON grid: {} rows x {} cols",
-                grid.len(),
-                if grid.is_empty() { 0 } else { grid[0].len() }
-            );
+async fn process_payload_and_send_to_feather(data: &[u8]) {
+    // If JSON, treat as heatmap and map to 6 states
+    if let Some(grid) = parse_json_grid(data) {
+        let states = grid_to_node_states_4(&grid);
 
-            let states = grid_to_node_states_4(&grid);
-            println!("Node states to send: {:?}", states);
-
-            match serialport::new("/dev/ttyACM0", 115_200)
-                .timeout(Duration::from_millis(50))
-                .open()
-            {
-                Ok(mut port) => {
-                    if let Err(e) = port.write_all(&states) {
-                        eprintln!("UART write failed: {e:?}");
-                    }
-                }
-                Err(e) => eprintln!("Could not open /dev/ttyACM0: {e:?}"),
-            }
-
-            return;
-        }
-
-        println!("JSON detected but failed to parse.");
-        return;
+        if let Ok(mut port) = serialport::new("/dev/ttyACM0", 115200)
+        .timeout(Duration::from_millis(50))
+        .open()
+    {
+        let _ = port.write_all(&states);
     }
-
-    // If not JSON, but at least 6 raw bytes, forward as node states
-    if data.len() >= 6 {
-        let to_send = &data[..6];
-        println!("Forwarding raw 6-byte states: {:?}", to_send);
-
-        match serialport::new("/dev/ttyACM0", 115_200)
-            .timeout(Duration::from_millis(50))
-            .open()
-        {
-            Ok(mut port) => {
-                if let Err(e) = port.write_all(to_send) {
-                    eprintln!("UART write failed: {e:?}");
-                }
-            }
-            Err(e) => eprintln!("Could not open /dev/ttyACM0: {e:?}"),
-        }
-
-        return;
-    }
-
-    println!(
-        "Received {} bytes — not enough for raw node-state packet.",
-        data.len()
-    );
+    return;
+}
 }
 
 fn parse_json_grid(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
-    // Plain [[f32]]
-    if let Ok(v) = serde_json::from_slice::<Vec<Vec<f32>>>(bytes) {
-        if is_rectangular(&v) {
-            return Some(v);
-        }
-    }
-
-    // Wrapper
-    #[derive(Deserialize)]
-    struct GridWrapper {
-        grid: Vec<Vec<f32>>,
-    }
-
-    if let Ok(w) = serde_json::from_slice::<GridWrapper>(bytes) {
-        if is_rectangular(&w.grid) {
-            return Some(w.grid);
-        }
-    }
-
-    None
-}
-
-fn is_rectangular(v: &Vec<Vec<f32>>) -> bool {
-    if v.is_empty() {
-        return true;
-    }
-    let cols = v[0].len();
-    v.iter().all(|row| row.len() == cols)
+    serde_json::from_slice::<Vec<Vec<f32>>>(bytes).ok()
 }
 
 fn grid_to_node_states_4(grid: &Vec<Vec<f32>>) -> [u8; 6] {
