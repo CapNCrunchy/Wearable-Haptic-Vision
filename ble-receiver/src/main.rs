@@ -60,7 +60,7 @@ async fn main() {
                             let last_payload_for_write = Arc::clone(&last_payload_for_write);
                             async move {
                                 {
-                                    let mut buf = last_payload_for_write.lock();
+                                    let mut buf = last_payload_for_write.lock().await;
                                     *buf = data.clone();
                                 }
 
