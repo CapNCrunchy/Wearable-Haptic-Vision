@@ -1,51 +1,33 @@
-use bluer::{
-    adv::Advertisement,
-    gatt::local::{
-        Application, Characteristic, CharacteristicRead, CharacteristicWrite, CharacteristicWriteMethod,
-        Service,
-    },
-    Uuid,
-};
+use bluer::{adv::Advertisement, gatt::local::{Application, Characteristic, CharacteristicRead, CharacteristicWrite, CharacteristicWriteMethod, Service}, Uuid};
 use futures::FutureExt;
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{collections::{BTreeSet, VecDeque}, io::Write as _, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::sleep};
-
-use serialport;
-use std::io::Write;
-use serde_json;
 
 const SRV_UUID: Uuid = Uuid::from_u128(0x8b322909_2d3b_447b_a4d5_dfe0c009ec5a);
 const WR_CHAR_UUID: Uuid = Uuid::from_u128(0x8b32290a_2d3b_447b_a4d5_dfe0c009ec5a);
-const INFO_UUID:   Uuid = Uuid::from_u128(0x8b32290c_2d3b_447b_a4d5_dfe0c009ec5a);
+const INFO_UUID: Uuid = Uuid::from_u128(0x8b32290c_2d3b_447b_a4d5_dfe0c009ec5a);
+const SERIAL_PATH: &str = "/dev/serial/by-id/usb-Adafruit_Feather_RP2040_DF648C86534125530-if00";
+const HISTORY_MAX: usize = 8;
+
+#[derive(Clone, Debug)]
+struct GridFrame { rows: usize, cols: usize, data: Vec<Vec<f32>> }
+
+#[derive(Default)]
+struct AppState { last_raw: Vec<u8>, last_grid: Option<GridFrame>, history: VecDeque<GridFrame> }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     env_logger::init();
-
     let session = bluer::Session::new().await.expect("create bluer session");
-    let adapter = session
-        .default_adapter()
-        .await
-        .expect("get default adapter");
-    adapter
-        .set_powered(true)
-        .await
-        .expect("power on adapter");
-
+    let adapter = session.default_adapter().await.expect("get default adapter");
+    adapter.set_powered(true).await.expect("power on adapter");
     let mut svc = BTreeSet::new();
     svc.insert(SRV_UUID);
-    let adv = Advertisement {
-        service_uuids: svc,
-        discoverable: Some(true),
-        local_name: Some("WHV Haptic Receiver".to_string()),
-        ..Default::default()
-    };
+    let adv = Advertisement { service_uuids: svc, discoverable: Some(true), local_name: Some("WHV Haptic Receiver".to_string()), ..Default::default() };
     let _adv_handle = adapter.advertise(adv).await.expect("start advertising");
-
-    let last_payload: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let last_payload_for_write = Arc::clone(&last_payload);
-    let last_payload_for_read  = Arc::clone(&last_payload);
-
+    let state = Arc::new(Mutex::new(AppState::default()));
+    let state_for_write = Arc::clone(&state);
+    let state_for_read  = Arc::clone(&state);
     let app = Application {
         services: vec![Service {
             uuid: SRV_UUID,
@@ -57,43 +39,59 @@ async fn main() {
                         write: true,
                         write_without_response: true,
                         method: CharacteristicWriteMethod::Fun(Box::new(move |data, _req| {
-                            let last_payload_for_write = Arc::clone(&last_payload_for_write);
+                            let state_for_write = Arc::clone(&state_for_write);
                             async move {
-                                {
-                                    let mut buf = last_payload_for_write.lock().await;
-                                    *buf = data.clone();
-                                }
-
                                 print!("RX {} bytes: [", data.len());
                                 for (i, b) in data.iter().enumerate() {
                                     if i > 0 { print!(" "); }
                                     print!("{:02X}", b);
                                 }
                                 println!("]");
-
-                                process_payload_and_send_to_feather(&data);
-                                
+                                {
+                                    let mut st = state_for_write.lock().await;
+                                    st.last_raw = data.clone();
+                                }
+                                if !data.is_empty() && (data[0] == b'{' || data[0] == b'[') {
+                                    if let Some(grid) = parse_json_grid(&data) {
+                                        let mut st = state_for_write.lock().await;
+                                        let gf = GridFrame { rows: grid.len(), cols: grid.get(0).map(|r| r.len()).unwrap_or(0), data: grid.clone() };
+                                        st.last_grid = Some(gf.clone());
+                                        st.history.push_back(gf);
+                                        while st.history.len() > HISTORY_MAX { st.history.pop_front(); }
+                                        let states = grid_to_node_states_4(&grid);
+                                        send_bytes_to_feather(&states);
+                                    } else {
+                                        println!("JSON detected but failed to parse as 2D floats.");
+                                    }
+                                } else {
+                                    if data.len() >= 6 {
+                                        let to_send = &data[..6];
+                                        println!("Forwarding raw 6-byte states: {:?}", to_send);
+                                        send_bytes_to_feather(to_send);
+                                    } else {
+                                        println!("Not JSON and < 6 bytes; ignoring.");
+                                    }
+                                }
                                 Ok(())
-                            }
-                            .boxed()
+                            }.boxed()
                         })),
                         ..Default::default()
                     }),
                     ..Default::default()
                 },
-
                 Characteristic {
                     uuid: INFO_UUID,
                     read: Some(CharacteristicRead {
                         read: true,
                         fun: Box::new(move |_req| {
-                            let last_payload_for_read = Arc::clone(&last_payload_for_read);
+                            let state_for_read = Arc::clone(&state_for_read);
                             async move {
-                                let len = last_payload_for_read.lock().await.len();
-                                let s = format!("WHV Pi5 Receiver v0.1 (last {} bytes)", len);
+                                let st = state_for_read.lock().await;
+                                let raw_len = st.last_raw.len();
+                                let (rows, cols) = st.last_grid.as_ref().map(|g| (g.rows, g.cols)).unwrap_or((0, 0));
+                                let s = format!("WHV Pi5 Receiver v0.1 | last_raw={} bytes | last_grid={}x{} | history={}", raw_len, rows, cols, st.history.len());
                                 Ok(s.into_bytes())
-                            }
-                            .boxed()
+                            }.boxed()
                         }),
                         ..Default::default()
                     }),
@@ -104,76 +102,48 @@ async fn main() {
         }],
         ..Default::default()
     };
-
-    let _app_handle = adapter
-        .serve_gatt_application(app)
-        .await
-        .expect("serve gatt application");
-
-    println!("BLE receiver is up. Write to char {} and I'll log it.", WR_CHAR_UUID);
-
-    loop {
-        sleep(Duration::from_secs(60)).await;
-    }
+    let _app_handle = adapter.serve_gatt_application(app).await.expect("serve gatt");
+    println!("BLE receiver is up. Using serial: {SERIAL_PATH}");
+    loop { sleep(Duration::from_secs(60)).await; }
 }
 
-fn process_payload_and_send_to_feather(data: &[u8]) {
-    // Treat as heatmap and map to 6 states
-    if let Some(grid) = parse_json_grid(data) {
-        let states = grid_to_node_states_4(&grid);
-
-        if let Ok(mut port) = serialport::new("/dev/ttyACM0", 115200)
-        .timeout(Duration::from_millis(50))
-        .open()
-    {
-        let _ = port.write_all(&states);
-    }
-    return;
+fn send_bytes_to_feather(bytes: &[u8]) {
+    match serialport::new(SERIAL_PATH, 115_200).timeout(Duration::from_millis(100)).open() {
+        Ok(mut port) => {
+            if let Err(e) = port.write_all(bytes) { eprintln!("UART write failed: {e:?}"); return; }
+            let _ = port.flush();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Err(e) => eprintln!("Could not open {SERIAL_PATH}: {e:?}"),
     }
 }
 
 fn parse_json_grid(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
-    println!("RAW UTF8: {}", String::from_utf8_lossy(bytes));
-    serde_json::from_slice::<Vec<Vec<f32>>>(bytes).ok()
+    if let Ok(v) = serde_json::from_slice::<Vec<Vec<f32>>>(bytes) { if is_rectangular(&v) { return Some(v); } }
+    #[derive(serde::Deserialize)]
+    struct Obj { grid: Vec<Vec<f32>> }
+    if let Ok(obj) = serde_json::from_slice::<Obj>(bytes) { if is_rectangular(&obj.grid) { return Some(obj.grid); } }
+    None
+}
+
+fn is_rectangular(v: &Vec<Vec<f32>>) -> bool {
+    if v.is_empty() { return true; }
+    let cols = v[0].len();
+    v.iter().all(|r| r.len() == cols)
 }
 
 fn grid_to_node_states_4(grid: &Vec<Vec<f32>>) -> [u8; 6] {
-    let mut states = [4u8; 6]; // default all to least pressure
-
-    if grid.is_empty() || grid[0].is_empty() {
-        return states;
-    }
-
-    // Ensures only 2x3 grid is sent
+    let mut states = [4u8; 6];
+    if grid.is_empty() || grid[0].is_empty() { return states; }
     let rows = grid.len().min(2);
     let cols = grid[0].len().min(3);
-
     for r in 0..rows {
         for c in 0..cols {
-            let idx = r * 3 + c; // 0..5
+            let idx = r * 3 + c;
             let mut v = grid[r][c];
-
-            if v.is_nan() {
-                v = 0.0;
-            }
-            if v < 0.0 {
-                v = 0.0;
-            }
-            if v > 1.0 {
-                v = 1.0;
-            }
-
-            let state = if v < 0.25 {
-                4u8   // far, least pressure
-            } else if v < 0.5 {
-                3u8
-            } else if v < 0.75 {
-                2u8
-            } else {
-                1u8
-            };
-
-            states[idx] = state;
+            if v.is_nan() { v = 0.0; }
+            v = v.clamp(0.0, 1.0);
+            states[idx] = if v < 0.25 { 4 } else if v < 0.5 { 3 } else if v < 0.75 { 2 } else { 1 };
         }
     }
     states
