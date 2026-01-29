@@ -52,10 +52,12 @@ struct HeatMapGridView: View {
 
 struct DepthMapView: View {
     @StateObject private var depthCaptureService = DepthCaptureService()
+    @State private var sendData = false
+    
     @Environment(BluetoothManager.self) var bluetoothManager
     
     var body: some View {
-        VStack {
+        VStack(spacing: 20) {
             if let grid = depthCaptureService.depthMap {
                 HeatMapGridView(
                     proximityGrid: grid,
@@ -69,13 +71,30 @@ struct DepthMapView: View {
                     .foregroundColor(.gray)
                     .frame(height: 400)
             }
+            
+            Button(sendData ? "Sending" : "Send") {
+                sendData.toggle()
+            }
+            .padding()
+            .background(sendData ? Color.blue : Color.red)
+            .foregroundColor(.white)
+            .cornerRadius(12)
         }
+        .padding()
         .onAppear {
             depthCaptureService.start()
         }
         .onChange(of: depthCaptureService.depthMap) { _, newValue in
+            let shouldSend = sendData
+            
             Task.detached(priority: .utility) {
-                await serializeAndSend()
+                if (shouldSend) {
+                    await serializeAndSend()
+                    
+                    await MainActor.run {
+                        sendData = false
+                    }
+                }
             }
         }
     }
