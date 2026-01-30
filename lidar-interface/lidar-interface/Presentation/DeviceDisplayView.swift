@@ -10,23 +10,20 @@
 import SwiftUI
 
 // MARK: - Main Container View
-struct BLEDeviceView: View {
-    @State private var device: BLEDevice?
+struct DeviceDisplayView: View {
+    var deviceManager: DeviceManager
     @State private var showingDeviceList = false
     
     var body: some View {
-        if let device = device {
-            BLEDevicePill(
+        if let device = deviceManager.connectedDevice {
+            DevicePill(
                 deviceName: device.name,
-                isConnected: Binding(
-                    get: { device.isConnected },
-                    set: { self.device?.isConnected = $0 }
-                ),
+                isConnected: device.connection == .connected,
                 onConnectionToggle: {
-                    self.device?.isConnected.toggle()
+                    device.connection == .connected ? deviceManager.disconnectDevice() : deviceManager.connectDevice(device)
                 },
                 onRemove: {
-                    self.device = nil
+                    deviceManager.disconnectAndRemoveDevice()
                 }
             )
         } else {
@@ -37,8 +34,10 @@ struct BLEDeviceView: View {
             )
             .sheet(isPresented: $showingDeviceList) {
                 AvailableDevicesSheet(
+                    availableDevices: deviceManager.discoveredDevices,
+                    isScanning: deviceManager.scanning,
                     onSelectDevice: { selectedDevice in
-                        self.device = selectedDevice
+                        deviceManager.connectDevice(selectedDevice)
                         showingDeviceList = false
                     }
                 )
@@ -50,16 +49,10 @@ struct BLEDeviceView: View {
 // MARK: - Available Devices Sheet
 struct AvailableDevicesSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var availableDevices: [BLEDevice] = [
-        BLEDevice(name: "iPhone 15 Pro", isConnected: false),
-        BLEDevice(name: "AirPods Pro", isConnected: false),
-        BLEDevice(name: "Apple Watch Series 9", isConnected: false),
-        BLEDevice(name: "iPad Air", isConnected: false),
-        BLEDevice(name: "MacBook Pro", isConnected: false)
-    ]
-    @State private var isScanning = true
+    var availableDevices: [Device] = []
+    var isScanning = false
     
-    var onSelectDevice: (BLEDevice) -> Void
+    var onSelectDevice: (Device) -> Void
     
     var body: some View {
         ZStack {
@@ -118,7 +111,7 @@ struct AvailableDevicesSheet: View {
                 // Device list
                 ScrollView {
                     VStack(spacing: 12) {
-                        ForEach(availableDevices) { device in
+                        ForEach(availableDevices, id: \.id) { device in
                             DeviceListItem(device: device) {
                                 onSelectDevice(device)
                             }
@@ -129,18 +122,12 @@ struct AvailableDevicesSheet: View {
                 }
             }
         }
-        .onAppear {
-            // Simulate scanning completion
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                isScanning = false
-            }
-        }
     }
 }
 
 // MARK: - Device List Item
 struct DeviceListItem: View {
-    let device: BLEDevice
+    let device: Device
     let onSelect: () -> Void
     
     var body: some View {
@@ -275,9 +262,9 @@ struct NoDevicePill: View {
 }
 
 // MARK: - BLE Device Pill (Connected State)
-struct BLEDevicePill: View {
+struct DevicePill: View {
     let deviceName: String
-    @Binding var isConnected: Bool
+    let isConnected: Bool
     var onConnectionToggle: () -> Void
     var onRemove: (() -> Void)?
     
@@ -373,13 +360,6 @@ struct BLEDevicePill: View {
     }
 }
 
-// MARK: - Model
-struct BLEDevice: Identifiable {
-    let id = UUID()
-    let name: String
-    var isConnected: Bool
-}
-
 // MARK: - Preview
 #Preview("BLE Device Pill") {
     ZStack {
@@ -395,7 +375,12 @@ struct BLEDevice: Identifiable {
         .ignoresSafeArea()
         
         VStack {
-            BLEDeviceView()
+            DeviceDisplayView(deviceManager: MockDeviceManager(
+                discoveredDevices: [
+                    MockDevice(name: "Device 1", connection: .disconnected),
+                    MockDevice(name: "Device 2", connection: .disconnected)
+                ],
+            ))
                 .padding(.horizontal)
                 .padding(.top, 60)
             
