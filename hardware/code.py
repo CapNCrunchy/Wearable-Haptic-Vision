@@ -40,7 +40,7 @@ Node3_1.direction = digitalio.Direction.OUTPUT
 Node3_2 = digitalio.DigitalInOut(board.D6)
 Node3_2.direction = digitalio.Direction.OUTPUT
 
-Node4_1 = digitalio.DigitalInOut(board.D5)
+Node4_1 = digitalio.DigitalInOut(board.D24)
 Node4_1.direction = digitalio.Direction.OUTPUT
 Node4_2 = digitalio.DigitalInOut(board.D25)
 Node4_2.direction = digitalio.Direction.OUTPUT
@@ -57,7 +57,7 @@ Node6_2.direction = digitalio.Direction.OUTPUT
 
 
 # Use the "data" serial channel
-serial = usb_cdc.data
+serial = usb_cdc.console
 NodeStates = bytearray(6)
 
 # helper function
@@ -78,7 +78,7 @@ def apply_node_state(state, pin1, pin2):
         # default
         pin1.value = False
         pin2.value = False
-
+        
 while True:
     if serial is not None and serial.in_waiting >= 6: #sending the 6 bytes that correspond to the 6 node states (1-4)
         serial.readinto(NodeStates)
@@ -91,6 +91,7 @@ while True:
         apply_node_state(NodeStates[3], Node4_1, Node4_2)
         apply_node_state(NodeStates[4], Node5_1, Node5_2)
         apply_node_state(NodeStates[5], Node6_1, Node6_2)
+    
     
     AllNodesOn.value = True
     
