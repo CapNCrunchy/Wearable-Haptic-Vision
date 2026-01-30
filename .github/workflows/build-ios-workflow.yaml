@@ -1,0 +1,25 @@
+name: build-ios-app
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "lidar-interface/**"
+      - "./github/workflows/build-ios-workflow.yaml"
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - run: bundle exec fastlane beta
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_KEY: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
+          APP_STORE_CONNECT_API_KEY_IS_KEY_CONTENT_BASE64: true

@@ -1,0 +1,16 @@
+platform :ios do
+    lane :beta do
+        app_store_connect_api_key
+
+        setup_ci if ENV['CI']
+
+        match(type: "appstore", readonly: true)
+
+        increment_build_number
+        build_app(scheme: "lidar-interface")
+
+        upload_to_testflight(
+            skip_waiting_for_build_processing: true
+        )
+    end
+end
