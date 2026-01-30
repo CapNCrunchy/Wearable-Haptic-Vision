@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "pressure_sensor")(type "KiCad")(uri "${KIPRJMOD}/additional_footprints/ul_2SMPP-02/KiCADv6/2026-01-30_07-48-43.kicad_sym")(options "")(descr ""))
+)
