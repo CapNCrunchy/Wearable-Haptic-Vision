@@ -377,8 +377,8 @@ struct DevicePill: View {
         VStack {
             DeviceDisplayView(deviceManager: MockDeviceManager(
                 discoveredDevices: [
-                    MockDevice(name: "Device 1", connection: .disconnected),
-                    MockDevice(name: "Device 2", connection: .disconnected)
+                    MockDevice(id: "device-1", name: "Device 1", connection: .disconnected),
+                    MockDevice(id: "device-2", name: "Device 2", connection: .disconnected)
                 ],
             ))
                 .padding(.horizontal)
