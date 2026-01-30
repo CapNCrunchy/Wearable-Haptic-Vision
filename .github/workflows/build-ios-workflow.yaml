@@ -6,6 +6,7 @@ on:
     paths:
       - "lidar-interface/**"
       - "./github/workflows/build-ios-workflow.yaml"
+  workflow_dispatch:
 jobs:
   build:
     runs-on: macos-latest
