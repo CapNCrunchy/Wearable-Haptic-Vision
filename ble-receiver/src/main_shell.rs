@@ -1,53 +1,17 @@
-use bluer::{
-    adv::Advertisement,
-    gatt::local::{
-        Application, Characteristic, CharacteristicRead, CharacteristicWrite,
-        CharacteristicWriteMethod, Service,
-    },
-    Uuid,
+use anyhow::Result;
+use esp_idf_hal::delay::Ets;
+use esp_idf_hal::gpio::{AnyOutputPin, Output, PinDriver};
+use esp_idf_svc::bt::ble::gap::{AdvConfiguration, AdvertisingData};
+use esp_idf_svc::bt::ble::gatt::server::{
+    AttributeValue, GattCharacteristic, GattServer, GattService, WriteEvent,
 };
-use futures::FutureExt;
+use esp_idf_svc::bt::ble::{Ble, BleDevice};
+use esp_idf_svc::log::EspLogger;
 use log::{info, warn};
-use rppal::gpio::{Gpio, OutputPin};
-use serde::Deserialize;
-use std::{
-    collections::{BTreeSet, VecDeque},
-    sync::Arc,
-    time::Duration,
-};
-use tokio::{
-    sync::{mpsc, Mutex},
-    time::{sleep},
-};
+use std::sync::{Arc, Mutex};
 
-const SRV_UUID: Uuid = Uuid::from_u128(0x8b322909_2d3b_447b_a4d5_dfe0c009ec5a);
-const WR_CHAR_UUID: Uuid = Uuid::from_u128(0x8b32290a_2d3b_447b_a4d5_dfe0c009ec5a);
-const INFO_UUID: Uuid = Uuid::from_u128(0x8b32290c_2d3b_447b_a4d5_dfe0c009ec5a);
-
-const HISTORY_MAX: usize = 8;
-
-const MUX_S0: u8 = 17;
-const MUX_S1: u8 = 27;
-const MUX_S2: u8 = 22;
-
-const STATE_A: u8 = 23;
-const STATE_B: u8 = 24;
-
-const PIN_ENABLE: Option<u8> = None;
-const PIN_LATCH: Option<u8> = None;
-
-#[derive(Clone, Copy, Debug)]
-struct VerticalWindow {
-    top_norm: f32,
-    bottom_norm: f32,
-}
-
-#[derive(Clone, Debug)]
-struct GridFrame {
-    rows: usize,
-    cols: usize,
-    data: Vec<Vec<f32>>,
-}
+const SERVICE_UUID: [u8; 16] = *b"\x5a\xec\x09\xc0\xe0\xdf\xd5\xa4\x7b\x44\x3b\x2d\x09\x29\x32\x8b";
+const WRITE_CHAR_UUID: [u8; 16] = *b"\x5a\xec\x09\xc0\xe0\xdf\xd5\xa4\x7b\x44\x3b\x2d\x0a\x29\x32\x8b";
 
 #[derive(Clone, Copy, Debug)]
 enum NodeCmd {
@@ -57,11 +21,11 @@ enum NodeCmd {
 }
 
 impl NodeCmd {
-    fn to_3bit(self) -> u32 {
-        match self {
-            NodeCmd::Hold => 0b000,
-            NodeCmd::Inflate => 0b001,
-            NodeCmd::Deflate => 0b010,
+    fn from_3bit(v: u8) -> NodeCmd {
+        match v & 0b111 {
+            0b001 => NodeCmd::Inflate,
+            0b010 => NodeCmd::Deflate,
+            _ => NodeCmd::Hold,
         }
     }
 
@@ -74,196 +38,78 @@ impl NodeCmd {
     }
 }
 
-#[derive(Default)]
-struct AppState {
-    last_raw: Vec<u8>,
-    last_grid: Option<GridFrame>,
-    history: VecDeque<GridFrame>,
-    window: VerticalWindow,
-    last_frame24: Option<[u8; 3]>,
-}
-
 struct GpioMuxDriver {
-    s0: OutputPin,
-    s1: OutputPin,
-    s2: OutputPin,
-    st_a: OutputPin,
-    st_b: OutputPin,
-    enable: Option<OutputPin>,
-    latch: Option<OutputPin>,
+    s0: PinDriver<'static, AnyOutputPin, Output>,
+    s1: PinDriver<'static, AnyOutputPin, Output>,
+    s2: PinDriver<'static, AnyOutputPin, Output>,
+    st_a: PinDriver<'static, AnyOutputPin, Output>,
+    st_b: PinDriver<'static, AnyOutputPin, Output>,
 }
 
 impl GpioMuxDriver {
-    fn new() -> anyhow::Result<Self> {
-        let gpio = Gpio::new()?;
+    fn new(
+        mux_s0: AnyOutputPin,
+        mux_s1: AnyOutputPin,
+        mux_s2: AnyOutputPin,
+        state_a: AnyOutputPin,
+        state_b: AnyOutputPin,
+    ) -> Result<Self> {
+        let mut s0 = PinDriver::output(mux_s0)?;
+        let mut s1 = PinDriver::output(mux_s1)?;
+        let mut s2 = PinDriver::output(mux_s2)?;
+        let mut st_a = PinDriver::output(state_a)?;
+        let mut st_b = PinDriver::output(state_b)?;
 
-        let mut s0 = gpio.get(MUX_S0)?.into_output();
-        let mut s1 = gpio.get(MUX_S1)?.into_output();
-        let mut s2 = gpio.get(MUX_S2)?.into_output();
-        let mut st_a = gpio.get(STATE_A)?.into_output();
-        let mut st_b = gpio.get(STATE_B)?.into_output();
+        s0.set_low()?;
+        s1.set_low()?;
+        s2.set_low()?;
+        st_a.set_low()?;
+        st_b.set_low()?;
 
-        s0.set_low();
-        s1.set_low();
-        s2.set_low();
-        st_a.set_low();
-        st_b.set_low();
-
-        let enable = match PIN_ENABLE {
-            Some(p) => {
-                let mut pin = gpio.get(p)?.into_output();
-                pin.set_high();
-                Some(pin)
-            }
-            None => None,
-        };
-
-        let latch = match PIN_LATCH {
-            Some(p) => {
-                let mut pin = gpio.get(p)?.into_output();
-                pin.set_low();
-                Some(pin)
-            }
-            None => None,
-        };
-
-        Ok(Self {
-            s0,
-            s1,
-            s2,
-            st_a,
-            st_b,
-            enable,
-            latch,
-        })
+        Ok(Self { s0, s1, s2, st_a, st_b })
     }
 
-    #[inline]
-    fn select_node(&mut self, idx: u8) {
-        if (idx & 0b001) != 0 {
-            self.s0.set_high()
-        } else {
-            self.s0.set_low()
-        }
-        if (idx & 0b010) != 0 {
-            self.s1.set_high()
-        } else {
-            self.s1.set_low()
-        }
-        if (idx & 0b100) != 0 {
-            self.s2.set_high()
-        } else {
-            self.s2.set_low()
-        }
+    fn select_node(&mut self, idx: u8) -> Result<()> {
+        if (idx & 0b001) != 0 { self.s0.set_high()? } else { self.s0.set_low()? }
+        if (idx & 0b010) != 0 { self.s1.set_high()? } else { self.s1.set_low()? }
+        if (idx & 0b100) != 0 { self.s2.set_high()? } else { self.s2.set_low()? }
+        Ok(())
     }
 
-    #[inline]
-    fn set_cmd(&mut self, cmd: NodeCmd) {
+    fn set_cmd(&mut self, cmd: NodeCmd) -> Result<()> {
         let (a, b) = cmd.to_state_bits();
-        if a {
-            self.st_a.set_high()
-        } else {
-            self.st_a.set_low()
-        }
-        if b {
-            self.st_b.set_high()
-        } else {
-            self.st_b.set_low()
-        }
+        if a { self.st_a.set_high()? } else { self.st_a.set_low()? }
+        if b { self.st_b.set_high()? } else { self.st_b.set_low()? }
+        Ok(())
     }
 
-    #[inline]
-    fn pulse_latch_if_present(&mut self) {
-        if let Some(l) = self.latch.as_mut() {
-            l.set_high();
-            l.set_low();
-        }
-    }
-
-    fn apply_frame(&mut self, cmds: [NodeCmd; 8]) {
+    fn apply_frame(&mut self, cmds: [NodeCmd; 8]) -> Result<()> {
         for i in 0u8..8 {
-            self.select_node(i);
-            self.set_cmd(cmds[i as usize]);
-            self.pulse_latch_if_present();
+            self.select_node(i)?;
+            self.set_cmd(cmds[i as usize])?;
+            Ets::delay_us(10);
         }
+        Ok(())
     }
 }
 
-#[derive(Deserialize)]
-struct ObjGrid {
-    grid: Vec<Vec<f32>>,
-}
-
-fn parse_json_grid(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
-    if let Ok(v) = serde_json::from_slice::<Vec<Vec<f32>>>(bytes) {
-        if is_rectangular(&v) {
-            return Some(v);
-        }
-    }
-    if let Ok(obj) = serde_json::from_slice::<ObjGrid>(bytes) {
-        if is_rectangular(&obj.grid) {
-            return Some(obj.grid);
-        }
-    }
-    None
-}
-
-fn is_rectangular(v: &Vec<Vec<f32>>) -> bool {
-    if v.is_empty() {
-        return true;
-    }
-    let cols = v[0].len();
-    v.iter().all(|r| r.len() == cols)
-}
-
-fn grid_to_8_node_strengths(grid: &Vec<Vec<f32>>, window: VerticalWindow) -> [f32; 8] {
-    let mut out = [0.0f32; 8];
-    if grid.is_empty() || grid[0].is_empty() {
-        return out;
-    }
-
-    let rows = grid.len();
-    let cols = grid[0].len();
-
-    let top = (window.top_norm.clamp(0.0, 1.0) * (rows as f32 - 1.0)).round() as isize;
-    let bot = (window.bottom_norm.clamp(0.0, 1.0) * (rows as f32 - 1.0)).round() as isize;
-    let (r0, r1) = if top <= bot { (top, bot) } else { (bot, top) };
-
-    let r0 = r0.max(0) as usize;
-    let r1 = r1.min((rows - 1) as isize) as usize;
-
-    for node in 0..8 {
-        let c0 = (node * cols) / 8;
-        let c1 = ((node + 1) * cols) / 8;
-
-        let mut sum = 0.0f32;
-        let mut n = 0usize;
-
-        for r in r0..=r1 {
-            for c in c0..c1 {
-                let mut v = grid[r][c];
-                if v.is_nan() {
-                    v = 0.0;
-                }
-                v = v.clamp(0.0, 1.0);
-                sum += v;
-                n += 1;
-            }
-        }
-
-        out[node] = if n == 0 { 0.0 } else { sum / n as f32 };
-    }
-
-    out
-}
-
-fn strengths_to_cmds(strengths: [f32; 8]) -> [NodeCmd; 8] {
+fn unpack_frame24(payload3: &[u8]) -> [NodeCmd; 8] {
+    let bits: u32 = (payload3[0] as u32) | ((payload3[1] as u32) << 8) | ((payload3[2] as u32) << 16);
     let mut cmds = [NodeCmd::Hold; 8];
     for i in 0..8 {
-        let v = strengths[i];
-        cmds[i] = if v < 0.33 {
+        let v = ((bits >> (i * 3)) & 0x7) as u8;
+        cmds[i] = NodeCmd::from_3bit(v);
+    }
+    cmds
+}
+
+fn strengths8_to_cmds(payload8: &[u8]) -> [NodeCmd; 8] {
+    let mut cmds = [NodeCmd::Hold; 8];
+    for i in 0..8 {
+        let v = payload8[i];
+        cmds[i] = if v < 85 {
             NodeCmd::Hold
-        } else if v < 0.66 {
+        } else if v < 170 {
             NodeCmd::Inflate
         } else {
             NodeCmd::Deflate
@@ -272,176 +118,62 @@ fn strengths_to_cmds(strengths: [f32; 8]) -> [NodeCmd; 8] {
     cmds
 }
 
-fn pack_frame24(cmds: [NodeCmd; 8]) -> [u8; 3] {
-    let mut bits: u32 = 0;
-    for i in 0..8 {
-        bits |= (cmds[i].to_3bit() & 0x7) << (i * 3);
-    }
-    [
-        (bits & 0xFF) as u8,
-        ((bits >> 8) & 0xFF) as u8,
-        ((bits >> 16) & 0xFF) as u8,
-    ]
-}
+fn main() -> Result<()> {
+    EspLogger::initialize_default();
 
-fn spawn_worker(
-    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    state: Arc<Mutex<AppState>>,
-    gpio: Arc<Mutex<GpioMuxDriver>>,
-) {
-    tokio::spawn(async move {
-        while let Some(data) = rx.recv().await {
-            {
-                let mut st = state.lock().await;
-                st.last_raw = data.clone();
-            }
+    let peripherals = esp_idf_hal::peripherals::Peripherals::take()?;
+    let pins = peripherals.pins;
 
-            if !data.is_empty() && (data[0] == b'{' || data[0] == b'[') {
-                if let Some(grid) = parse_json_grid(&data) {
-                    let gf = GridFrame {
-                        rows: grid.len(),
-                        cols: grid.get(0).map(|r| r.len()).unwrap_or(0),
-                        data: grid.clone(),
-                    };
+    let mux_s0 = pins.gpio17.into_output()?.downgrade();
+    let mux_s1 = pins.gpio16.into_output()?.downgrade();
+    let mux_s2 = pins.gpio4.into_output()?.downgrade();
+    let state_a = pins.gpio18.into_output()?.downgrade();
+    let state_b = pins.gpio19.into_output()?.downgrade();
 
-                    let window = {
-                        let mut st = state.lock().await;
-                        st.last_grid = Some(gf.clone());
-                        st.history.push_back(gf);
-                        while st.history.len() > HISTORY_MAX {
-                            st.history.pop_front();
-                        }
-                        st.window
-                    };
+    let driver = Arc::new(Mutex::new(GpioMuxDriver::new(mux_s0, mux_s1, mux_s2, state_a, state_b)?));
 
-                    let strengths = grid_to_8_node_strengths(&grid, window);
-                    let cmds = strengths_to_cmds(strengths);
-                    let frame24 = pack_frame24(cmds);
+    let ble = Ble::new()?;
+    let dev = BleDevice::new(&ble)?;
+    let mut gatt = GattServer::new(dev.clone())?;
 
-                    {
-                        let mut st = state.lock().await;
-                        st.last_frame24 = Some(frame24);
-                    }
+    let driver_for_cb = driver.clone();
 
-                    {
-                        let mut driver = gpio.lock().await;
-                        driver.apply_frame(cmds);
-                    }
+    let write_char = GattCharacteristic::new_write(
+        WRITE_CHAR_UUID,
+        AttributeValue::new(vec![]),
+        move |evt: WriteEvent| {
+            let data = evt.data();
+            let cmds_opt = match data.len() {
+                3 => Some(unpack_frame24(data)),
+                8 => Some(strengths8_to_cmds(data)),
+                _ => None,
+            };
 
-                    continue;
-                } else {
-                    warn!("JSON detected but parse failed");
-                    continue;
+            if let Some(cmds) = cmds_opt {
+                if let Ok(mut d) = driver_for_cb.lock() {
+                    let _ = d.apply_frame(cmds);
                 }
+            } else {
+                warn!("Unexpected payload length: {}", data.len());
             }
 
-            warn!("Non-JSON payload ignored (len={})", data.len());
-        }
-    });
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    env_logger::init();
-
-    let state = Arc::new(Mutex::new(AppState {
-        window: VerticalWindow {
-            top_norm: 0.0,
-            bottom_norm: 1.0,
+            Ok(())
         },
-        ..Default::default()
-    }));
+    );
 
-    let gpio = Arc::new(Mutex::new(GpioMuxDriver::new()?));
+    let service = GattService::new_primary(SERVICE_UUID, vec![write_char]);
+    gatt.register_service(service)?;
+    gatt.start()?;
 
-    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    spawn_worker(rx, Arc::clone(&state), Arc::clone(&gpio));
+    let mut adv_data = AdvertisingData::new();
+    adv_data.set_name(Some("WHV-ESP32".into()));
+    adv_data.add_service_uuid(SERVICE_UUID);
 
-    let session = bluer::Session::new().await?;
-    let adapter = session.default_adapter().await?;
-    adapter.set_powered(true).await?;
+    dev.gap().advertise(AdvConfiguration::default(), adv_data, None)?;
 
-    let mut svc = BTreeSet::new();
-    svc.insert(SRV_UUID);
-
-    let adv = Advertisement {
-        service_uuids: svc,
-        discoverable: Some(true),
-        local_name: Some("WHV Haptic Receiver (GPIO)".to_string()),
-        ..Default::default()
-    };
-    let _adv_handle = adapter.advertise(adv).await?;
-
-    let tx_for_write = tx.clone();
-    let state_for_read = Arc::clone(&state);
-
-    let app = Application {
-        services: vec![Service {
-            uuid: SRV_UUID,
-            primary: true,
-            characteristics: vec![
-                Characteristic {
-                    uuid: WR_CHAR_UUID,
-                    write: Some(CharacteristicWrite {
-                        write: true,
-                        write_without_response: true,
-                        method: CharacteristicWriteMethod::Fun(Box::new(move |data, _req| {
-                            let tx_for_write = tx_for_write.clone();
-                            async move {
-                                let _ = tx_for_write.send(data.clone());
-                                Ok(())
-                            }
-                            .boxed()
-                        })),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                Characteristic {
-                    uuid: INFO_UUID,
-                    read: Some(CharacteristicRead {
-                        read: true,
-                        fun: Box::new(move |_req| {
-                            let state_for_read = Arc::clone(&state_for_read);
-                            async move {
-                                let st = state_for_read.lock().await;
-                                let raw_len = st.last_raw.len();
-                                let (rows, cols) = st
-                                    .last_grid
-                                    .as_ref()
-                                    .map(|g| (g.rows, g.cols))
-                                    .unwrap_or((0, 0));
-                                let frame = st
-                                    .last_frame24
-                                    .map(|b| format!("{:02X}{:02X}{:02X}", b[2], b[1], b[0]))
-                                    .unwrap_or_else(|| "none".into());
-
-                                let s = format!(
-                                    "WHV GPIO | last_raw={} | last_grid={}x{} | history={} | frame24={}",
-                                    raw_len,
-                                    rows,
-                                    cols,
-                                    st.history.len(),
-                                    frame
-                                );
-                                Ok(s.into_bytes())
-                            }
-                            .boxed()
-                        }),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-
-    let _app_handle = adapter.serve_gatt_application(app).await?;
-    info!("BLE up. Driving GPIO mux/state pins.");
+    info!("BLE advertising as WHV-ESP32. Write 3B(frame24) or 8B(strengths).");
 
     loop {
-        sleep(Duration::from_secs(60)).await;
+        std::thread::sleep(std::time::Duration::from_secs(60));
     }
 }
