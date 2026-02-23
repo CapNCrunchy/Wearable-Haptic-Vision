@@ -11,10 +11,16 @@ import Combine
 class LiDARCollectionService: NSObject, ARSessionDelegate, ObservableObject, CollectionService {
     private var arSession: ARSession
     
-    @Published
-    var depthMap: [[Float]]?
+    @Published var depthMap: [[Float]]?
+    @Published var collecting: Bool
     
-    var collecting: Bool
+    private let targetFrameRate: Double = 30.0
+    
+    var depthMapPublisher: AnyPublisher<[[Float]]?, Never> {
+        $depthMap
+            .throttle(for: .seconds(1.0 / targetFrameRate), scheduler: DispatchQueue.main, latest: true)
+            .eraseToAnyPublisher()
+    }
     
     let DEPTH_ROWS: Int = 1
     let DEPTH_COLS: Int = 8
