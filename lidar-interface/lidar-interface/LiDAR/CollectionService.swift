@@ -5,10 +5,16 @@
 //  Created by Colin McClure on 2/19/26.
 //
 
-protocol CollectionService {
-    var depthMap: [[Float]]? { get }
+import Combine
+
+protocol CollectionService: AnyObject, ObservableObject {
+    var depthMap: [[Float]]? { get set }
+    var collecting: Bool { get set }
     
-    var collecting: Bool { get }
+    // Publisher that emits depth map updates
+    var depthMapPublisher: AnyPublisher<[[Float]]?, Never> { get }
     
-    mutating func toggleCollection()
+    func toggleCollection()
+    func start()
+    func stop()
 }
