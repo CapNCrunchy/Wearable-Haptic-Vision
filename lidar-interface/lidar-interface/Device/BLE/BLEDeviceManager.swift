@@ -6,18 +6,19 @@
 //
 
 import CoreBluetooth
+import Combine
 
-class BLEDeviceManager: NSObject, DeviceManager, CBCentralManagerDelegate {
-    var discoveredDevices: [Device] = []
-    var connectedDevice: Device? = nil
-    var scanning: Bool = false
+class BLEDeviceManager: NSObject, DeviceManager, CBCentralManagerDelegate, ObservableObject {
+    @Published var discoveredDevices: [Device] = []
+    @Published var connectedDevice: Device? = nil
+    @Published var scanning: Bool = false
     
     private var centralManager: CBCentralManager!
     private var managerState: CBManagerState = .unknown
     
     override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
+        centralManager = CBCentralManager(delegate: self, queue: .main)
         managerState = centralManager.state
     }
     
