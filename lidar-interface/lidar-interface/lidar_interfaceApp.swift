@@ -9,12 +9,9 @@ import SwiftUI
 
 @main
 struct lidar_interfaceApp: App {
-    @State private var bluetoothManager = BluetoothManager()
-    
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(bluetoothManager)
         }
     }
 }
