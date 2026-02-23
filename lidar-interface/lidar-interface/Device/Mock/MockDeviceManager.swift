@@ -5,13 +5,12 @@
 //  Created by Colin McClure on 1/30/26.
 //
 
-import Observation
+import Combine
 
-@Observable
-class MockDeviceManager: DeviceManager {
-    var discoveredDevices: [Device]
-    var connectedDevice: Device?
-    var scanning: Bool
+class MockDeviceManager: DeviceManager, ObservableObject {
+    @Published var discoveredDevices: [Device]
+    @Published var connectedDevice: Device?
+    @Published var scanning: Bool
     
     init(discoveredDevices: [Device] = [],
          connectedDevice: Device? = nil,
@@ -23,6 +22,10 @@ class MockDeviceManager: DeviceManager {
     
     func discoverDevices() {
         scanning = true
+    }
+    
+    func stopScanning() {
+        scanning = false
     }
     
     func connectDevice(_ device: Device) {
