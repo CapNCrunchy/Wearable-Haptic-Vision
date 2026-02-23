@@ -15,6 +15,8 @@ class BLEDevice: NSObject, Device, CBPeripheralDelegate {
     
     var peripheral: CBPeripheral
     private var writeCharacteristic: CBCharacteristic?
+    private var isWriting: Bool = false
+    private var writeQueue: [Data] = []
     
     init(peripheral: CBPeripheral) {
         self.peripheral = peripheral
@@ -32,11 +34,27 @@ class BLEDevice: NSObject, Device, CBPeripheralDelegate {
             return
         }
         
+        // If using .withResponse, queue writes to prevent overwhelming BLE
         if characteristic.properties.contains(.write) {
-            peripheral.writeValue(data, for: characteristic, type: .withResponse)
+            writeQueue.append(data)
+            processWriteQueue()
         } else if characteristic.properties.contains(.writeWithoutResponse) {
-            peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+            // Check if peripheral can accept more data
+            if peripheral.canSendWriteWithoutResponse {
+                peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+            } else {
+                writeQueue.append(data)
+            }
         }
+    }
+    
+    private func processWriteQueue() {
+        guard let characteristic = writeCharacteristic else { return }
+        guard !isWriting, !writeQueue.isEmpty else { return }
+        
+        let data = writeQueue.removeFirst()
+        isWriting = true
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
     
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
@@ -56,5 +74,19 @@ class BLEDevice: NSObject, Device, CBPeripheralDelegate {
         }
         
         setConnection(.connected)
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        isWriting = false
+        processWriteQueue()
+    }
+    
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard let characteristic = writeCharacteristic,
+              characteristic.properties.contains(.writeWithoutResponse),
+              !writeQueue.isEmpty else { return }
+        
+        let data = writeQueue.removeFirst()
+        peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
     }
 }
