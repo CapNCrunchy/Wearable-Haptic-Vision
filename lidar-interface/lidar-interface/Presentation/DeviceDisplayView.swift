@@ -10,8 +10,8 @@
 import SwiftUI
 
 // MARK: - Main Container View
-struct DeviceDisplayView: View {
-    var deviceManager: DeviceManager
+struct DeviceDisplayView<Manager: DeviceManager>: View {
+    @ObservedObject var deviceManager: Manager
     @State private var showingDeviceList = false
     
     var body: some View {
@@ -30,15 +30,19 @@ struct DeviceDisplayView: View {
             NoDevicePill(
                 onAddDevice: {
                     showingDeviceList = true
+                    deviceManager.discoverDevices()
                 }
             )
             .sheet(isPresented: $showingDeviceList) {
                 AvailableDevicesSheet(
-                    availableDevices: deviceManager.discoveredDevices,
-                    isScanning: deviceManager.scanning,
+                    deviceManager: deviceManager,
                     onSelectDevice: { selectedDevice in
+                        deviceManager.stopScanning()
                         deviceManager.connectDevice(selectedDevice)
                         showingDeviceList = false
+                    },
+                    onDismiss: {
+                        deviceManager.stopScanning()
                     }
                 )
             }
@@ -47,12 +51,12 @@ struct DeviceDisplayView: View {
 }
 
 // MARK: - Available Devices Sheet
-struct AvailableDevicesSheet: View {
+struct AvailableDevicesSheet<Manager: DeviceManager>: View {
     @Environment(\.dismiss) private var dismiss
-    var availableDevices: [Device] = []
-    var isScanning = false
+    @ObservedObject var deviceManager: Manager
     
     var onSelectDevice: (Device) -> Void
+    var onDismiss: () -> Void
     
     var body: some View {
         ZStack {
@@ -77,6 +81,7 @@ struct AvailableDevicesSheet: View {
                     Spacer()
                     
                     Button(action: {
+                        onDismiss()
                         dismiss()
                     }) {
                         Image(systemName: "xmark.circle.fill")
@@ -89,7 +94,7 @@ struct AvailableDevicesSheet: View {
                 .padding(.bottom, 8)
                 
                 // Scanning indicator
-                if isScanning {
+                if deviceManager.scanning {
                     HStack(spacing: 8) {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -111,7 +116,7 @@ struct AvailableDevicesSheet: View {
                 // Device list
                 ScrollView {
                     VStack(spacing: 12) {
-                        ForEach(availableDevices, id: \.id) { device in
+                        ForEach(deviceManager.discoveredDevices, id: \.id) { device in
                             DeviceListItem(device: device) {
                                 onSelectDevice(device)
                             }
