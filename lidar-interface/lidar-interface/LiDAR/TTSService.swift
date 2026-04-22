@@ -7,14 +7,12 @@
 
 import AVFoundation
 
-/// A service that provides text-to-speech audio feedback throughout the app
 class TTSService {
     static let shared = TTSService()
     
     private let synthesizer = AVSpeechSynthesizer()
     
     private init() {
-        // Configure audio session for TTS
         configureAudioSession()
     }
     
@@ -28,11 +26,6 @@ class TTSService {
         }
     }
     
-    /// Speaks the given text using text-to-speech
-    /// - Parameters:
-    ///   - text: The text to speak
-    ///   - rate: The speech rate (0.0 - 1.0). Default is 0.5
-    ///   - interrupting: Whether to stop current speech before starting. Default is false
     func speak(_ text: String, rate: Float = 0.5, interrupting: Bool = false) {
         if interrupting && synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
@@ -46,7 +39,6 @@ class TTSService {
         synthesizer.speak(utterance)
     }
     
-    /// Stops any currently playing speech
     func stopSpeaking() {
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
@@ -73,5 +65,9 @@ class TTSService {
     
     func announceDeviceDisconnected() {
         speak("Device disconnected", rate: 0.55)
+    }
+    
+    func announceCollectionStoppedByDisconnection() {
+        speak("LiDAR collection stopped due to device disconnection", rate: 0.55)
     }
 }
