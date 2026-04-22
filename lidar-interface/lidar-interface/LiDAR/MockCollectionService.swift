@@ -66,6 +66,10 @@ class MockCollectionService: ObservableObject, CollectionService {
         timer = nil
     }
     
+    func observeDeviceConnection<Manager: DeviceManager>(_ deviceManager: Manager) {
+        // No-op for mock - could add test behavior if needed
+    }
+    
     private func generateRandomDepthMap() {
         var newDepthMap: [[Float]] = []
         

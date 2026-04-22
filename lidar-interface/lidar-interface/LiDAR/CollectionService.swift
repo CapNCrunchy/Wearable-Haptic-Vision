@@ -17,4 +17,5 @@ protocol CollectionService: AnyObject, ObservableObject {
     func toggleCollection()
     func start()
     func stop()
+    func observeDeviceConnection<Manager: DeviceManager>(_ deviceManager: Manager)
 }

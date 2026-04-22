@@ -15,6 +15,7 @@ class LiDARCollectionService: NSObject, ARSessionDelegate, ObservableObject, Col
     @Published var collecting: Bool
     
     private let targetFrameRate: Double = 30.0
+    private var cancellables = Set<AnyCancellable>()
     
     var depthMapPublisher: AnyPublisher<[[Float]]?, Never> {
         $depthMap
@@ -33,6 +34,28 @@ class LiDARCollectionService: NSObject, ARSessionDelegate, ObservableObject, Col
         self.collecting = false
         super.init()
         arSession.delegate = self
+    }
+    
+    func observeDeviceConnection<Manager: DeviceManager>(_ deviceManager: Manager) {
+        deviceManager.objectWillChange
+            .sink { [weak self] _ in
+                if let device = deviceManager.connectedDevice {
+                    if device.connection == .disconnected || device.connection == .disconnecting {
+                        if self?.collecting == true {
+                            self?.stop()
+                            self?.collecting = false
+                            TTSService.shared.announceCollectionStoppedByDisconnection()
+                        }
+                    }
+                } else {
+                    if self?.collecting == true {
+                        self?.stop()
+                        self?.collecting = false
+                        TTSService.shared.announceCollectionStoppedByDisconnection()
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
     
     func toggleCollection() {

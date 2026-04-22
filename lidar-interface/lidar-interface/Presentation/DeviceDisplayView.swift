@@ -16,16 +16,25 @@ struct DeviceDisplayView<Manager: DeviceManager>: View {
     
     var body: some View {
         if let device = deviceManager.connectedDevice {
-            DevicePill(
-                deviceName: device.name,
-                isConnected: device.connection == .connected,
-                onConnectionToggle: {
-                    device.connection == .connected ? deviceManager.disconnectDevice() : deviceManager.connectDevice(device)
-                },
-                onRemove: {
-                    deviceManager.disconnectAndRemoveDevice()
-                }
-            )
+            // Force observation of the BLEDevice if it's an ObservableObject
+            if let bleDevice = device as? BLEDevice {
+                DevicePillObserver(
+                    device: bleDevice,
+                    deviceManager: deviceManager
+                )
+            } else {
+                // Fallback for non-BLE devices
+                DevicePill(
+                    deviceName: device.name,
+                    isConnected: device.connection == .connected,
+                    onConnectionToggle: {
+                        device.connection == .connected ? deviceManager.disconnectDevice() : deviceManager.connectDevice(device)
+                    },
+                    onRemove: {
+                        deviceManager.disconnectAndRemoveDevice()
+                    }
+                )
+            }
         } else {
             NoDevicePill(
                 onAddDevice: {
@@ -47,6 +56,25 @@ struct DeviceDisplayView<Manager: DeviceManager>: View {
                 )
             }
         }
+    }
+}
+
+// MARK: - Device Pill Observer (for BLEDevice)
+private struct DevicePillObserver: View {
+    @ObservedObject var device: BLEDevice
+    let deviceManager: any DeviceManager
+    
+    var body: some View {
+        DevicePill(
+            deviceName: device.name,
+            isConnected: device.connection == .connected,
+            onConnectionToggle: {
+                device.connection == .connected ? deviceManager.disconnectDevice() : deviceManager.connectDevice(device)
+            },
+            onRemove: {
+                deviceManager.disconnectAndRemoveDevice()
+            }
+        )
     }
 }
 
