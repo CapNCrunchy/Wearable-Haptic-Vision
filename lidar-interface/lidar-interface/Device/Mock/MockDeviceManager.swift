@@ -42,4 +42,8 @@ class MockDeviceManager: DeviceManager, ObservableObject {
         disconnectDevice()
         connectedDevice = nil
     }
+    
+    func reconnectToPairedDevice() {
+        // No-op for mock - could simulate reconnection if needed for testing
+    }
 }

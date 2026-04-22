@@ -17,4 +17,5 @@ protocol DeviceManager: AnyObject, ObservableObject {
     func connectDevice(_ device: Device)
     func disconnectDevice()
     func disconnectAndRemoveDevice()
+    func reconnectToPairedDevice()
 }
