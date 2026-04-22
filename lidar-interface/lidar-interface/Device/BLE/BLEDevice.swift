@@ -6,12 +6,13 @@
 //
 
 import CoreBluetooth
+import Combine
 
-class BLEDevice: NSObject, Device, CBPeripheralDelegate {
+class BLEDevice: NSObject, Device, CBPeripheralDelegate, ObservableObject {
     var id: String
     
     var name: String
-    var connection: DeviceConnection
+    @Published var connection: DeviceConnection
     
     var peripheral: CBPeripheral
     private var writeCharacteristic: CBCharacteristic?
