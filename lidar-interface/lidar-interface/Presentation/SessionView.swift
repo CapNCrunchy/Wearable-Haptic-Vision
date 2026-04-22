@@ -7,18 +7,18 @@
 
 import SwiftUI
 import Combine
+import AVFoundation
 
-// TODO: refactor this into its own SessionManager... this kind of behavior shouldn't be in a View. it's messy.
-
+// MARK: - Session Control View
 struct SessionView<Service: CollectionService, Manager: DeviceManager>: View {
     @ObservedObject var deviceManager: Manager
     @ObservedObject var collectionService: Service
     
-    @State private var cancellable: AnyCancellable?
-    
     var body: some View {
         Button(action: {
-            toggleSession()
+            Task {
+                await SessionManager.shared.toggleSession()
+            }
         }) {
             HStack(spacing: 8) {
                 Image(systemName: collectionService.collecting ? "stop.circle.fill" : "play.circle.fill")
@@ -56,43 +56,6 @@ struct SessionView<Service: CollectionService, Manager: DeviceManager>: View {
         .buttonStyle(PlainButtonStyle())
         .disabled(deviceManager.connectedDevice == nil || deviceManager.connectedDevice?.connection != .connected)
         .opacity(deviceManager.connectedDevice == nil || deviceManager.connectedDevice?.connection != .connected ? 0.5 : 1.0)
-    }
-    
-    private func toggleSession() {
-        if collectionService.collecting {
-            // Stop the session
-            collectionService.toggleCollection()
-            cancellable?.cancel()
-            cancellable = nil
-        } else {
-            // Start the session
-            collectionService.toggleCollection()
-            
-            // Subscribe to depth map updates using the publisher from the protocol
-            cancellable = collectionService.depthMapPublisher
-                .compactMap { $0 } // Filter out nil values
-                .throttle(for: .milliseconds(100), scheduler: DispatchQueue.main, latest: true)
-                .sink { depthMap in
-                    sendDepthData(depthMap)
-                }
-        }
-    }
-    
-    private func sendDepthData(_ depthMap: [[Float]]) {
-        guard let device = deviceManager.connectedDevice else {
-            return
-        }
-        
-        // Flatten the 2D array and convert to binary
-        let flattenedData = depthMap.flatMap { $0 }
-        
-        var data = Data()
-        for value in flattenedData {
-            var floatValue = value
-            data.append(Data(bytes: &floatValue, count: MemoryLayout<Float>.size))
-        }
-        
-        device.sendData(data)
     }
 }
 

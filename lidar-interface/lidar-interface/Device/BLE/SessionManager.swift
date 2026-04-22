@@ -8,7 +8,6 @@
 import Foundation
 import Combine
 
-/// Manages the LiDAR collection session lifecycle
 @MainActor
 class SessionManager: ObservableObject {
     static let shared = SessionManager()
@@ -16,15 +15,82 @@ class SessionManager: ObservableObject {
     @Published var isActive: Bool = false
     
     private var cancellable: AnyCancellable?
-    private weak var deviceManager: (any DeviceManager)?
+    private var connectionObserver: AnyCancellable?
+    private weak var deviceManager: BLEDeviceManager?
     private weak var collectionService: (any CollectionService)?
+    
+    // Auto-reconnect configuration
+    private let maxReconnectAttempts = 2
+    private var reconnectAttempts = 0
     
     private init() {}
     
-    /// Register the managers with the session manager
-    func configure(deviceManager: any DeviceManager, collectionService: any CollectionService) {
+    func configure(deviceManager: BLEDeviceManager, collectionService: any CollectionService) {
         self.deviceManager = deviceManager
         self.collectionService = collectionService
+        
+        setupConnectionObserver()
+    }
+    
+    private func setupConnectionObserver() {
+        guard let deviceManager = deviceManager else { return }
+        
+        connectionObserver = deviceManager.$connectedDevice
+            .compactMap { $0 as? BLEDevice }
+            .flatMap { device in
+                // Observe the connection state of the BLE device
+                device.$connection
+            }
+            .sink { [weak self] connectionState in
+                Task { @MainActor in
+                    await self?.handleConnectionChange(connectionState: connectionState)
+                }
+            }
+    }
+    
+    private func handleConnectionChange(connectionState: DeviceConnection) async {
+        guard isActive,
+              let deviceManager = deviceManager,
+              let collectionService = collectionService,
+              let device = deviceManager.connectedDevice else {
+            return
+        }
+        
+        if connectionState == .disconnected {
+            guard reconnectAttempts < maxReconnectAttempts else {
+                TTSService.shared.speak("Connection lost. Session stopped.", rate: 0.55, interrupting: true)
+                stopSession()
+                reconnectAttempts = 0
+                return
+            }
+            
+            reconnectAttempts += 1
+            TTSService.shared.speak("Connection lost. Reconnecting, attempt \(reconnectAttempts)", rate: 0.55, interrupting: true)
+            
+            if collectionService.collecting {
+                collectionService.stop()
+                collectionService.collecting = false
+            }
+            
+            deviceManager.connectDevice(device)
+            
+            var attempts = 0
+            while device.connection != .connected && attempts < 30 {
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                attempts += 1
+            }
+            
+            if device.connection == .connected {
+                reconnectAttempts = 0
+                
+                collectionService.start()
+                collectionService.collecting = true
+                
+                TTSService.shared.speak("Reconnected successfully. Session resumed.", rate: 0.55, interrupting: true)
+            } else {
+                TTSService.shared.speak("Reconnection failed", rate: 0.55, interrupting: true)
+            }
+        }
     }
     
     /// Toggle the session - connects device if needed, then toggles collection
@@ -51,13 +117,12 @@ class SessionManager: ObservableObject {
             return
         }
         
-        // Check if device is connected
+        reconnectAttempts = 0
+        
         if deviceManager.connectedDevice?.connection != .connected {
-            // Try to reconnect to paired device
             if let pairedDevice = deviceManager.connectedDevice {
                 deviceManager.connectDevice(pairedDevice)
                 
-                // Wait for connection (with timeout)
                 var attempts = 0
                 while deviceManager.connectedDevice?.connection != .connected && attempts < 30 {
                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
@@ -74,15 +139,12 @@ class SessionManager: ObservableObject {
             }
         }
         
-        // Start collection
         collectionService.start()
         collectionService.collecting = true
         isActive = true
         
-        // TTS feedback
         TTSService.shared.announceSessionStarted()
         
-        // Subscribe to depth map updates
         cancellable = collectionService.depthMapPublisher
             .compactMap { $0 } // Filter out nil values
             .throttle(for: .milliseconds(100), scheduler: DispatchQueue.main, latest: true)
@@ -91,32 +153,28 @@ class SessionManager: ObservableObject {
             }
     }
     
-    /// Stop the session
     func stopSession() {
         guard let collectionService = collectionService else {
             return
         }
         
-        // Stop collection
         collectionService.stop()
         collectionService.collecting = false
         isActive = false
         
-        // Cancel data subscription
+        reconnectAttempts = 0
+        
         cancellable?.cancel()
         cancellable = nil
         
-        // TTS feedback
         TTSService.shared.announceSessionStopped()
     }
     
-    /// Send depth data to the connected device
     private func sendDepthData(_ depthMap: [[Float]]) {
         guard let device = deviceManager?.connectedDevice else {
             return
         }
         
-        // Flatten the 2D array and convert to binary
         let flattenedData = depthMap.flatMap { $0 }
         
         var data = Data()
